@@ -2,55 +2,41 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-// ---------------- JSON KONFIGURĀCIJA ----------------
-static class JsonConfig
-{
-    public static readonly JsonSerializerOptions Options = new JsonSerializerOptions
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        Converters =
-        {
-            new DateOnlyJsonConverter(),
-            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) // allows "Food" / "food"
-        }
-    };
-}
-
-public class DateOnlyJsonConverter : JsonConverter<DateOnly>
-{
-    private const string Format = "yyyy-MM-dd";
-
-    public override DateOnly Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        string s = reader.GetString();
-        if (string.IsNullOrWhiteSpace(s))
-            throw new JsonException("Empty date.");
-        s = s.Trim();
-        if (DateOnly.TryParseExact(s, Format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
-            return d;
-        if (DateOnly.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
-            return d;
-        throw new JsonException($"Invalid date format: {s}. Expected {Format}.");
-    }
-
-    public override void Write(Utf8JsonWriter writer, DateOnly value, JsonSerializerOptions options)
-    {
-        writer.WriteStringValue(value.ToString(Format, CultureInfo.InvariantCulture));
-    }
-}
-
-// ---------------- Validation exception ----------------
+// ==========================
+// ValidationException
+// ==========================
 public class ValidationException : Exception
 {
     public ValidationException(string message) : base(message) { }
 }
 
-// ---------------- Tools ----------------
+// ==========================
+// DateOnly JSON converter
+// ==========================
+public class DateOnlyJsonConverter : JsonConverter<DateOnly>
+{
+    private const string Format = "yyyy-MM-dd";
+    
+    public override DateOnly Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var s = reader.GetString();
+        if (DateOnly.TryParseExact(s, Format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+            return d;
+        throw new JsonException($"Nederīgs datuma formāts: {s}. Gaida {Format}");
+    }
+
+    public override void Write(Utf8JsonWriter writer, DateOnly value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value.ToString(Format));
+    }
+}
+
+// ==========================
+// Tools (palīgmetodes)
+// ==========================
 public static class Tools
 {
     public static string ReadNonEmptyString(string prompt)
@@ -58,35 +44,34 @@ public static class Tools
         while (true)
         {
             Console.Write(prompt);
-            string input = Console.ReadLine() ?? "";
-            if (!string.IsNullOrWhiteSpace(input)) return input.Trim();
+            var s = Console.ReadLine();
+            if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
             Console.WriteLine("Ievade nedrīkst būt tukša. Mēģiniet vēlreiz.");
         }
     }
 
-    public static decimal ReadDecimal(string prompt)
+    public static decimal SafeParseDecimal(string prompt)
     {
         while (true)
         {
             Console.Write(prompt);
-            string s = Console.ReadLine() ?? "";
-            s = s.Trim().Replace(',', '.');
+            var s = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(s)) { Console.WriteLine("Ievade nedrīkst būt tukša."); continue; }
+            s = s.Replace(',', '.');
             if (decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) && v > 0)
                 return v;
-            Console.WriteLine("Nederīga summa. Ievadiet pozitīvu skaitli, piem., 123.45");
+            Console.WriteLine("Nederīga summa. Ievadiet pozitīvu skaitli (piem., 123.45).");
         }
     }
 
-    public static DateOnly ReadDate(string prompt)
+    public static DateOnly SafeParseDate(string prompt)
     {
         while (true)
         {
             Console.Write(prompt);
-            string s = Console.ReadLine() ?? "";
-            s = s.Trim();
+            var s = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(s)) { Console.WriteLine("Ievade nedrīkst būt tukša."); continue; }
             if (DateOnly.TryParseExact(s, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
-                return d;
-            if (DateOnly.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
                 return d;
             Console.WriteLine("Nederīgs datuma formāts. Izmantojiet YYYY-MM-DD.");
         }
@@ -97,8 +82,8 @@ public static class Tools
         while (true)
         {
             Console.Write(prompt);
-            string s = Console.ReadLine() ?? "";
-            s = s.Trim();
+            var s = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(s)) { Console.WriteLine("Ievade nedrīkst būt tukša."); continue; }
             if (Enum.TryParse<T>(s, true, out var val)) return val;
             Console.WriteLine("Nederīga vērtība. Pieejamās: " + string.Join(", ", Enum.GetNames(typeof(T))));
         }
@@ -106,46 +91,53 @@ public static class Tools
 
     public static string FormatCurrency(decimal amount) => $"{Math.Round(amount, 2):0.00} €";
 
+    public static decimal SafeDivide(decimal numerator, decimal denominator)
+    {
+        if (denominator == 0) return 0;
+        return numerator / denominator;
+    }
+
     public static string PercentString(decimal part, decimal total)
     {
         if (total == 0) return "0.0%";
-        decimal p = 100m * part / total;
+        var p = SafeDivide(part * 100, total);
         return $"{Math.Round(p, 1):0.0}%";
     }
 
     public static bool Confirm(string question)
     {
         Console.Write(question + " (jā/nē): ");
-        string a = Console.ReadLine() ?? "";
-        a = a.Trim().ToLowerInvariant();
+        var a = Console.ReadLine()?.Trim().ToLower();
         return a == "jā" || a == "ja";
     }
 
-    public static string ReadJsonInput()
+    public static bool TryParseYearMonth(string ym, out int year, out int month)
     {
-        Console.WriteLine("Ielīmējiet JSON. Ja daudzrindu — pabeidziet ar rindas tekstu END. Ja vienrindiņa — ielīmējiet un nospiediet Enter.");
-        var first = Console.ReadLine() ?? "";
-        // remove BOM if present
-        if (first.Length > 0 && first[0] == '\uFEFF') first = first.Substring(1);
+        year = 0; month = 0;
+        var parts = ym.Split('-', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) return false;
+        if (!int.TryParse(parts[0], out year)) return false;
+        if (!int.TryParse(parts[1], out month)) return false;
+        if (month < 1 || month > 12) return false;
+        return true;
+    }
 
-        string trimmedFirst = first.Trim();
-        if (trimmedFirst.StartsWith("{") && trimmedFirst.EndsWith("}"))
-        {
-            // single-line JSON
-            return cleanedQuotes(first);
-        }
+    public static void PrintTableHeader(string[] headers)
+    {
+        Console.WriteLine(new string('-', 80));
+        Console.WriteLine($"| {string.Join(" | ", headers.Select(h => h.PadRight(15)))} |");
+        Console.WriteLine(new string('-', 80));
+    }
 
-        var lines = new List<string>();
-        lines.Add(first);
-        while (true)
-        {
-            string line = Console.ReadLine() ?? "";
-            if (line.Trim() == "END") break;
-            lines.Add(line);
-        }
-        string text = string.Join(Environment.NewLine, lines);
-        // normalize
-        return NormalizeJsonString(text);
+    public static void PrintHelp()
+    {
+        Console.WriteLine("\n=== PALĪDZĪBA ===");
+        Console.WriteLine("• Ienākumi: reģistrējiet ienākumus no darba, investīcijām u.c.");
+        Console.WriteLine("• Izdevumi: reģistrējiet izdevumus pa kategorijām");
+        Console.WriteLine("• Abonementi: mēneša maksas par servisiem");
+        Console.WriteLine("• Mēneša pārskats: detalizēta finanšu analīze");
+        Console.WriteLine("• JSON: datu apmaiņa starp ierīcēm");
+        Console.WriteLine("================\n");
     }
 
     public static string NormalizeJsonString(string s)
@@ -160,27 +152,11 @@ public static class Tools
         cleaned = cleaned.Replace("\u00A0", " ");
         return cleaned;
     }
-
-    static string cleanedQuotes(string s)
-    {
-        return s.Replace("“", "\"").Replace("”", "\"").Replace("‘", "'").Replace("’", "'");
-    }
-
-    // === Добавленный метод для парсинга YYYY-MM ===
-    public static bool TryParseYearMonth(string ym, out int year, out int month)
-    {
-        year = 0; month = 0;
-        if (string.IsNullOrWhiteSpace(ym)) return false;
-        var parts = ym.Trim().Split('-', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2) return false;
-        if (!int.TryParse(parts[0], out year)) return false;
-        if (!int.TryParse(parts[1], out month)) return false;
-        if (month < 1 || month > 12) return false;
-        return true;
-    }
 }
 
-// ---------------- Models ----------------
+// ==========================
+// Models
+// ==========================
 public enum Category { Food, Transport, Fun, School, Other }
 
 public class Income
@@ -189,10 +165,79 @@ public class Income
     public string Source { get; set; }
     public decimal Amount { get; set; }
 
+    // Bezparametra konstruktors JSON deserializācijai
+    public Income() { }
+
+    public Income(DateOnly date, string source, decimal amount)
+    {
+        if (string.IsNullOrWhiteSpace(source)) throw new ValidationException("Avots nedrīkst būt tukšs.");
+        if (amount <= 0) throw new ValidationException("Summai jābūt lielākai par 0.");
+        Date = date;
+        Source = source.Trim();
+        Amount = amount;
+    }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Source)) throw new ValidationException("Avots nedrīkst būt tukšs.");
         if (Amount <= 0) throw new ValidationException("Summai jābūt lielākai par 0.");
+    }
+
+    // Statiskais saraksts kā prasīts specifikācijā
+    public static List<Income> List { get; set; } = new List<Income>();
+
+    public static void Add()
+    {
+        try
+        {
+            var d = Tools.SafeParseDate("Datums (YYYY-MM-DD): ");
+            var s = Tools.ReadNonEmptyString("Avots: ");
+            var a = Tools.SafeParseDecimal("Summa (€): ");
+            List.Add(new Income(d, s, a));
+            Console.WriteLine("✅ Ienākums pievienots.");
+        }
+        catch (ValidationException ex) { Console.WriteLine("❌ Kļūda: " + ex.Message); }
+    }
+
+    public static List<Income> GetSorted() => List.OrderByDescending(i => i.Date).ToList();
+
+    public static void PrintAll()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav ienākumu ierakstu."); return; }
+        
+        Tools.PrintTableHeader(new[] {"Datums", "Avots", "Summa"});
+        int i = 1;
+        foreach (var inc in sorted)
+            Console.WriteLine($"| {inc.Date:yyyy-MM-dd}".PadRight(17) + $"| {inc.Source}".PadRight(17) + $"| {Tools.FormatCurrency(inc.Amount)}".PadRight(17) + "|");
+        Console.WriteLine(new string('-', 80));
+    }
+
+    public static void Delete()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav ierakstu."); return; }
+        
+        PrintAll();
+        var input = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
+        if (!int.TryParse(input, out var n)) { Console.WriteLine("❌ Nederīgs numurs."); return; }
+        if (n == 0) { Console.WriteLine("❌ Atcelts."); return; }
+        if (n == -1)
+        {
+            if (Tools.Confirm("⚠️ Tiešām dzēst visu?"))
+            {
+                List.Clear();
+                Console.WriteLine("✅ Visi ienākumi izdzēsti.");
+            }
+            return;
+        }
+        if (n >= 1 && n <= sorted.Count)
+        {
+            var item = sorted[n - 1];
+            List.Remove(item);
+            Console.WriteLine("✅ Ieraksts dzēsts.");
+        }
+        else Console.WriteLine("❌ Nederīgs numurs.");
     }
 }
 
@@ -203,11 +248,89 @@ public class Expense
     public decimal Amount { get; set; }
     public string Note { get; set; }
 
+    // Bezparametra konstruktors JSON deserializācijai
+    public Expense() { }
+
+    public Expense(DateOnly date, Category category, decimal amount, string note)
+    {
+        if (amount <= 0) throw new ValidationException("Summai jābūt lielākai par 0.");
+        if (string.IsNullOrWhiteSpace(note)) throw new ValidationException("Piezīme nedrīkst būt tukša.");
+        Date = date;
+        Category = category;
+        Amount = amount;
+        Note = note.Trim();
+    }
+
     public void Validate()
     {
         if (Amount <= 0) throw new ValidationException("Summai jābūt lielākai par 0.");
         if (string.IsNullOrWhiteSpace(Note)) throw new ValidationException("Piezīme nedrīkst būt tukša.");
     }
+
+    // Statiskais saraksts kā prasīts specifikācijā
+    public static List<Expense> List { get; set; } = new List<Expense>();
+
+    public static void Add()
+    {
+        try
+        {
+            var d = Tools.SafeParseDate("Datums (YYYY-MM-DD): ");
+            Console.WriteLine("📂 Kategorijas: " + string.Join(", ", Enum.GetNames(typeof(Category))));
+            var cat = Tools.ReadEnum<Category>("Kategorija: ");
+            var amt = Tools.SafeParseDecimal("Summa (€): ");
+            var note = Tools.ReadNonEmptyString("Piezīme: ");
+            List.Add(new Expense(d, cat, amt, note));
+            Console.WriteLine("✅ Izdevums pievienots.");
+        }
+        catch (ValidationException ex) { Console.WriteLine("❌ Kļūda: " + ex.Message); }
+    }
+
+    public static List<Expense> GetSorted() => List.OrderByDescending(e => e.Date).ToList();
+
+    public static void PrintAll(IEnumerable<Expense> source = null)
+    {
+        var list = (source ?? GetSorted()).ToList();
+        if (!list.Any()) { Console.WriteLine("📭 Nav izdevumu ierakstu."); return; }
+        
+        Tools.PrintTableHeader(new[] {"Datums", "Kategorija", "Summa", "Piezīme"});
+        int i = 1;
+        foreach (var e in list)
+            Console.WriteLine($"| {e.Date:yyyy-MM-dd}".PadRight(17) + $"| {e.Category}".PadRight(17) + $"| {Tools.FormatCurrency(e.Amount)}".PadRight(17) + $"| {e.Note}".PadRight(17) + "|");
+        Console.WriteLine(new string('-', 80));
+    }
+
+    public static void Delete()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav ierakstu."); return; }
+        
+        PrintAll();
+        var input = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
+        if (!int.TryParse(input, out var n)) { Console.WriteLine("❌ Nederīgs numurs."); return; }
+        if (n == 0) { Console.WriteLine("❌ Atcelts."); return; }
+        if (n == -1)
+        {
+            if (Tools.Confirm("⚠️ Tiešām dzēst visus izdevumus?")) 
+            { 
+                List.Clear(); 
+                Console.WriteLine("✅ Visi izdzēsti."); 
+            }
+            return;
+        }
+        if (n >= 1 && n <= sorted.Count)
+        {
+            var item = sorted[n - 1];
+            List.Remove(item);
+            Console.WriteLine("✅ Ieraksts dzēsts.");
+        }
+        else Console.WriteLine("❌ Nederīgs numurs.");
+    }
+
+    public static List<Expense> FilterByDate(DateOnly from, DateOnly to) =>
+        List.Where(e => e.Date >= from && e.Date <= to).OrderByDescending(e => e.Date).ToList();
+
+    public static List<Expense> FilterByCategory(Category cat) =>
+        List.Where(e => e.Category == cat).OrderByDescending(e => e.Date).ToList();
 }
 
 public class Subscription
@@ -217,14 +340,104 @@ public class Subscription
     public DateOnly StartDate { get; set; }
     public bool IsActive { get; set; }
 
+    // Bezparametra konstruktors JSON deserializācijai
+    public Subscription() { }
+
+    public Subscription(string name, decimal price, DateOnly start, bool active)
+    {
+        if (string.IsNullOrWhiteSpace(name)) throw new ValidationException("Nosaukums nedrīkst būt tukšs.");
+        if (price <= 0) throw new ValidationException("Cena jābūt lielāka par 0.");
+        Name = name.Trim();
+        MonthlyPrice = price;
+        StartDate = start;
+        IsActive = active;
+    }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Name)) throw new ValidationException("Nosaukums nedrīkst būt tukšs.");
         if (MonthlyPrice <= 0) throw new ValidationException("Mēneša cena jābūt lielākai par 0.");
     }
+
+    // Statiskais saraksts kā prasīts specifikācijā
+    public static List<Subscription> List { get; set; } = new List<Subscription>();
+
+    public static void Add()
+    {
+        try
+        {
+            var name = Tools.ReadNonEmptyString("Nosaukums: ");
+            var price = Tools.SafeParseDecimal("Mēneša cena (€): ");
+            var date = Tools.SafeParseDate("Sākuma datums (YYYY-MM-DD): ");
+            List.Add(new Subscription(name, price, date, true));
+            Console.WriteLine("✅ Abonements pievienots.");
+        }
+        catch (ValidationException ex) { Console.WriteLine("❌ Kļūda: " + ex.Message); }
+    }
+
+    public static List<Subscription> GetSorted() => List.OrderByDescending(x => x.StartDate).ToList();
+
+    public static void PrintAll()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav abonementu."); return; }
+        
+        Tools.PrintTableHeader(new[] {"Nosaukums", "Cena", "Sākums", "Statuss"});
+        int i = 1;
+        foreach (var s in sorted)
+            Console.WriteLine($"| {s.Name}".PadRight(17) + $"| {Tools.FormatCurrency(s.MonthlyPrice)}".PadRight(17) + $"| {s.StartDate:yyyy-MM-dd}".PadRight(17) + $"| {(s.IsActive ? "✅ Aktīvs" : "❌ Neaktīvs")}".PadRight(17) + "|");
+        Console.WriteLine(new string('-', 80));
+    }
+
+    public static void Toggle()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav abonementu."); return; }
+        
+        PrintAll();
+        var input = Tools.ReadNonEmptyString("Ievadiet numuru: ");
+        if (!int.TryParse(input, out var n) || n < 1 || n > sorted.Count) 
+        { 
+            Console.WriteLine("❌ Nederīgs numurs."); 
+            return; 
+        }
+        
+        var selectedItem = sorted[n - 1];
+        selectedItem.IsActive = !selectedItem.IsActive;
+        Console.WriteLine($"✅ Statuss mainīts: {selectedItem.Name} → {(selectedItem.IsActive ? "Aktīvs" : "Neaktīvs")}");
+    }
+
+    public static void Delete()
+    {
+        var sorted = GetSorted();
+        if (!sorted.Any()) { Console.WriteLine("📭 Nav abonementu."); return; }
+        
+        PrintAll();
+        var input = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
+        if (!int.TryParse(input, out var n)) { Console.WriteLine("❌ Nederīgs numurs."); return; }
+        if (n == 0) { Console.WriteLine("❌ Atcelts."); return; }
+        if (n == -1)
+        {
+            if (Tools.Confirm("⚠️ Tiešām dzēst visus abonementus?")) 
+            { 
+                List.Clear(); 
+                Console.WriteLine("✅ Visi izdzēsti."); 
+            }
+            return;
+        }
+        if (n >= 1 && n <= sorted.Count)
+        {
+            var item = sorted[n - 1];
+            List.Remove(item);
+            Console.WriteLine("✅ Ieraksts dzēsts: " + item.Name);
+        }
+        else Console.WriteLine("❌ Nederīgs numurs.");
+    }
 }
 
-// DTO for import/export
+// ==========================
+// JSON DTO for import/export
+// ==========================
 public class ExportDto
 {
     public List<Income> Incomes { get; set; } = new List<Income>();
@@ -232,340 +445,256 @@ public class ExportDto
     public List<Subscription> Subscriptions { get; set; } = new List<Subscription>();
 }
 
-// ---------------- Program ----------------
+// ==========================
+// Program (UI & Logic)
+// ==========================
 public class Program
 {
-    // keep runtime data (each class stores its own list as spec asked not to centralize)
-    public static List<Income> Incomes = new List<Income>();
-    public static List<Expense> Expenses = new List<Expense>();
-    public static List<Subscription> Subscriptions = new List<Subscription>();
+    static JsonSerializerOptions jsonOptions = new JsonSerializerOptions
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new DateOnlyJsonConverter(), new JsonStringEnumConverter() }
+    };
 
     public static void Main()
     {
+        Console.WriteLine("🎯 PERSONĪGAIS FINANŠU PLĀNOTĀJS");
+        Console.WriteLine("======================================");
+        
         while (true)
         {
-            Console.WriteLine("\n=== Personīgais finanšu plānotājs ===");
-            Console.WriteLine("1) Ienākumi");
-            Console.WriteLine("2) Izdevumi");
-            Console.WriteLine("3) Abonementi");
-            Console.WriteLine("4) Saraksti");
-            Console.WriteLine("5) Filtri");
-            Console.WriteLine("6) Mēneša pārskats");
-            Console.WriteLine("7) Import/Export JSON");
-            Console.WriteLine("0) Iziet");
-            Console.Write("Izvēle: ");
-            string choice = Console.ReadLine() ?? "";
+            Console.WriteLine("\n=== GALVENĀ IZVĒLNE ===");
+            Console.WriteLine("1) 💰 Ienākumi");
+            Console.WriteLine("2) 💸 Izdevumi"); 
+            Console.WriteLine("3) 📱 Abonementi");
+            Console.WriteLine("4) 📋 Saraksti");
+            Console.WriteLine("5) 🔍 Filtri");
+            Console.WriteLine("6) 📊 Mēneša pārskats");
+            Console.WriteLine("7) 📁 Import/Export JSON");
+            Console.WriteLine("8) ❓ Palīdzība");
+            Console.WriteLine("0) 🚪 Iziet");
+            
+            var choice = Tools.ReadNonEmptyString("Izvēle: ");
 
             try
             {
-                switch (choice.Trim())
+                switch (choice)
                 {
-                    case "1": IncomesMenu(); break;
-                    case "2": ExpensesMenu(); break;
-                    case "3": SubscriptionsMenu(); break;
+                    case "1": IncomeMenu(); break;
+                    case "2": ExpenseMenu(); break;
+                    case "3": SubscriptionMenu(); break;
                     case "4": ShowLists(); break;
                     case "5": FiltersMenu(); break;
                     case "6": MonthReportMenu(); break;
                     case "7": ImportExportMenu(); break;
-                    case "0": Console.WriteLine("Atā!"); return;
-                    default: Console.WriteLine("Nederīga izvēle."); break;
+                    case "8": Tools.PrintHelp(); break;
+                    case "0": Console.WriteLine("👋 Atā!"); return;
+                    default: Console.WriteLine("❌ Nezināma izvēle."); break;
                 }
             }
-            catch (ValidationException vex)
-            {
-                Console.WriteLine("Validācijas kļūda: " + vex.Message);
-            }
-            catch (JsonException jex)
-            {
-                Console.WriteLine("JSON kļūda: " + jex.Message);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Kļūda: " + ex.Message);
-            }
+            catch (ValidationException vex) { Console.WriteLine("❌ Validācijas kļūda: " + vex.Message); }
+            catch (JsonException jex) { Console.WriteLine("❌ JSON kļūda: " + jex.Message); }
+            catch (Exception ex) { Console.WriteLine("❌ Kļūda: " + ex.Message); }
         }
     }
 
-    // ---- Income menu ----
-    static void IncomesMenu()
+    // --- Menus ---
+    static void IncomeMenu()
     {
-        Console.WriteLine("\n1) Pievienot  2) Parādīt  3) Dzēst  0) Atpakaļ");
-        Console.Write("Izvēle: ");
-        string c = Console.ReadLine() ?? "";
-        if (c == "1")
-        {
-            try
-            {
-                Income inc = new Income
-                {
-                    Date = Tools.ReadDate("Datums (YYYY-MM-DD): "),
-                    Source = Tools.ReadNonEmptyString("Avots: "),
-                    Amount = Tools.ReadDecimal("Summa (€): ")
-                };
-                inc.Validate();
-                Incomes.Add(inc);
-                Console.WriteLine("Ienākums pievienots.");
-            }
-            catch (ValidationException ex) { Console.WriteLine("Kļūda: " + ex.Message); }
-        }
-        else if (c == "2")
-        {
-            if (!Incomes.Any()) { Console.WriteLine("Nav ienākumu."); return; }
-            int i = 1;
-            foreach (var inc in Incomes.OrderByDescending(x => x.Date))
-                Console.WriteLine($"{i++}. {inc.Date:yyyy-MM-dd} — {inc.Source}: {Tools.FormatCurrency(inc.Amount)}");
-        }
-        else if (c == "3")
-        {
-            if (!Incomes.Any()) { Console.WriteLine("Nav ierakstu."); return; }
-            int i = 1;
-            foreach (var inc in Incomes.OrderByDescending(x => x.Date))
-                Console.WriteLine($"{i++}. {inc.Date:yyyy-MM-dd} — {inc.Source}: {Tools.FormatCurrency(inc.Amount)}");
-            string s = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
-            if (!int.TryParse(s, out int n)) { Console.WriteLine("Nederīgs numurs."); return; }
-            if (n == 0) { Console.WriteLine("Atcelts."); return; }
-            if (n == -1)
-            {
-                if (Tools.Confirm("Tiešām dzēst visu?")) { Incomes.Clear(); Console.WriteLine("Visi ienākumi izdzēsti."); }
-                return;
-            }
-            var sorted = Incomes.OrderByDescending(x => x.Date).ToList();
-            if (n >= 1 && n <= sorted.Count)
-            {
-                var item = sorted[n - 1];
-                Incomes.Remove(item);
-                Console.WriteLine("Ieraksts dzēsts.");
-            }
-            else Console.WriteLine("Nederīgs numurs.");
-        }
+        Console.WriteLine("\n=== IENĀKUMI ===");
+        Console.WriteLine("1) Pievienot  2) Rādīt  3) Dzēst  0) Atpakaļ");
+        var c = Tools.ReadNonEmptyString("Izvēle: ");
+        if (c == "1") Income.Add();
+        else if (c == "2") Income.PrintAll();
+        else if (c == "3") Income.Delete();
     }
 
-    // ---- Expenses menu ----
-    static void ExpensesMenu()
+    static void ExpenseMenu()
     {
-        Console.WriteLine("\n1) Pievienot  2) Parādīt  3) Dzēst  0) Atpakaļ");
-        Console.Write("Izvēle: ");
-        string c = Console.ReadLine() ?? "";
-        if (c == "1")
-        {
-            try
-            {
-                Console.WriteLine("Kategorijas: " + string.Join(", ", Enum.GetNames(typeof(Category))));
-                Expense exp = new Expense
-                {
-                    Date = Tools.ReadDate("Datums (YYYY-MM-DD): "),
-                    Category = Tools.ReadEnum<Category>("Kategorija: "),
-                    Amount = Tools.ReadDecimal("Summa (€): "),
-                    Note = Tools.ReadNonEmptyString("Piezīme: ")
-                };
-                exp.Validate();
-                Expenses.Add(exp);
-                Console.WriteLine("Izdevums pievienots.");
-            }
-            catch (ValidationException ex) { Console.WriteLine("Kļūda: " + ex.Message); }
-        }
-        else if (c == "2")
-        {
-            if (!Expenses.Any()) { Console.WriteLine("Nav izdevumu."); return; }
-            int i = 1;
-            foreach (var e in Expenses.OrderByDescending(x => x.Date))
-                Console.WriteLine($"{i++}. {e.Date:yyyy-MM-dd} — [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}");
-        }
-        else if (c == "3")
-        {
-            if (!Expenses.Any()) { Console.WriteLine("Nav ierakstu."); return; }
-            int i = 1;
-            foreach (var e in Expenses.OrderByDescending(x => x.Date))
-                Console.WriteLine($"{i++}. {e.Date:yyyy-MM-dd} — [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}");
-            string s = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
-            if (!int.TryParse(s, out int n)) { Console.WriteLine("Nederīgs numurs."); return; }
-            if (n == 0) { Console.WriteLine("Atcelts."); return; }
-            if (n == -1)
-            {
-                if (Tools.Confirm("Tiešām dzēst visus izdevumus?")) { Expenses.Clear(); Console.WriteLine("Visi izdzēsti."); }
-                return;
-            }
-            var sorted = Expenses.OrderByDescending(x => x.Date).ToList();
-            if (n >= 1 && n <= sorted.Count)
-            {
-                var item = sorted[n - 1];
-                Expenses.Remove(item);
-                Console.WriteLine("Ieraksts dzēsts.");
-            }
-            else Console.WriteLine("Nederīgs numurs.");
-        }
+        Console.WriteLine("\n=== IZDEVUMI ===");
+        Console.WriteLine("1) Pievienot  2) Rādīt  3) Dzēst  0) Atpakaļ");
+        var c = Tools.ReadNonEmptyString("Izvēle: ");
+        if (c == "1") Expense.Add();
+        else if (c == "2") Expense.PrintAll();
+        else if (c == "3") Expense.Delete();
     }
 
-    // ---- Subscriptions menu ----
-    static void SubscriptionsMenu()
+    static void SubscriptionMenu()
     {
-        Console.WriteLine("\n1) Pievienot  2) Parādīt  3) Aktivizēt/Deaktivizēt  4) Dzēst  0) Atpakaļ");
-        Console.Write("Izvēle: ");
-        string c = Console.ReadLine() ?? "";
-        if (c == "1")
-        {
-            try
-            {
-                Subscription s = new Subscription
-                {
-                    Name = Tools.ReadNonEmptyString("Nosaukums: "),
-                    MonthlyPrice = Tools.ReadDecimal("Mēneša cena (€): "),
-                    StartDate = Tools.ReadDate("Sākuma datums (YYYY-MM-DD): "),
-                    IsActive = true
-                };
-                s.Validate();
-                Subscriptions.Add(s);
-                Console.WriteLine("Abonements pievienots.");
-            }
-            catch (ValidationException ex) { Console.WriteLine("Kļūda: " + ex.Message); }
-        }
-        else if (c == "2")
-        {
-            if (!Subscriptions.Any()) { Console.WriteLine("Nav abonementu."); return; }
-            int i = 1;
-            foreach (var s in Subscriptions.OrderByDescending(x => x.StartDate))
-                Console.WriteLine($"{i++}. {s.Name} — {Tools.FormatCurrency(s.MonthlyPrice)} — Sākums {s.StartDate:yyyy-MM-dd} — {(s.IsActive ? "Aktīvs" : "Neaktīvs")}");
-        }
-        else if (c == "3")
-        {
-            if (!Subscriptions.Any()) { Console.WriteLine("Nav abonementu."); return; }
-            int i = 1;
-            foreach (var s in Subscriptions.OrderByDescending(x => x.StartDate))
-                Console.WriteLine($"{i++}. {s.Name} — {(s.IsActive ? "Aktīvs" : "Neaktīvs")}");
-            string inStr = Tools.ReadNonEmptyString("Ieraksta numurs: ");
-            if (!int.TryParse(inStr, out int idx) || idx < 1 || idx > Subscriptions.Count) { Console.WriteLine("Nederīgs numurs."); return; }
-            Subscriptions[idx - 1].IsActive = !Subscriptions[idx - 1].IsActive;
-            Console.WriteLine("Statuss mainīts.");
-        }
-        else if (c == "4")
-        {
-            if (!Subscriptions.Any()) { Console.WriteLine("Nav abonementu."); return; }
-            int i = 1;
-            foreach (var s in Subscriptions.OrderByDescending(x => x.StartDate))
-                Console.WriteLine($"{i++}. {s.Name}");
-            string inStr = Tools.ReadNonEmptyString("Ieraksta numurs (0 = atcelt, -1 = dzēst visu): ");
-            if (!int.TryParse(inStr, out int n)) { Console.WriteLine("Nederīgs numurs."); return; }
-            if (n == 0) { Console.WriteLine("Atcelts."); return; }
-            if (n == -1)
-            {
-                if (Tools.Confirm("Tiešām dzēst visus abonementus?")) { Subscriptions.Clear(); Console.WriteLine("Visi izdzēsti."); }
-                return;
-            }
-            if (n >= 1 && n <= Subscriptions.Count)
-            {
-                Subscriptions.RemoveAt(n - 1);
-                Console.WriteLine("Ieraksts dzēsts.");
-            }
-            else Console.WriteLine("Nederīgs numurs.");
-        }
+        Console.WriteLine("\n=== ABONEMENTI ===");
+        Console.WriteLine("1) Pievienot  2) Rādīt  3) Aktivizēt/Deaktivizēt  4) Dzēst  0) Atpakaļ");
+        var c = Tools.ReadNonEmptyString("Izvēle: ");
+        if (c == "1") Subscription.Add();
+        else if (c == "2") Subscription.PrintAll();
+        else if (c == "3") Subscription.Toggle();
+        else if (c == "4") Subscription.Delete();
     }
 
-    // ---- Lists ----
     static void ShowLists()
     {
-        Console.WriteLine("\n-- Visi ieraksti (pēc datuma, dilstoši) --");
-        var combined = new List<(DateOnly, string)>();
-        combined.AddRange(Incomes.Select(i => (i.Date, $"[IENĀKUMS] {i.Date:yyyy-MM-dd} — {i.Source}: {Tools.FormatCurrency(i.Amount)}")));
-        combined.AddRange(Expenses.Select(e => (e.Date, $"[IZDEVUMS] {e.Date:yyyy-MM-dd} — [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}")));
-        combined.AddRange(Subscriptions.Select(s => (s.StartDate, $"[ABONEMENTS] {s.StartDate:yyyy-MM-dd} — {s.Name}: {Tools.FormatCurrency(s.MonthlyPrice)} — {(s.IsActive ? "Aktīvs" : "Neaktīvs")}")));
-        foreach (var row in combined.OrderByDescending(x => x.Item1))
-            Console.WriteLine($"{row.Item1:yyyy-MM-dd} {row.Item2}");
+        Console.WriteLine("\n=== VISI IERAKSTI (pēc datuma, dilstoši) ===");
+        var combined = new List<(DateOnly Date, string Text)>();
+        combined.AddRange(Income.List.Select(i => (i.Date, $"💰 [IENĀKUMS] {i.Source}: {Tools.FormatCurrency(i.Amount)}")));
+        combined.AddRange(Expense.List.Select(e => (e.Date, $"💸 [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}")));
+        combined.AddRange(Subscription.List.Select(s => (s.StartDate, $"📱 {s.Name}: {Tools.FormatCurrency(s.MonthlyPrice)} — {(s.IsActive ? "✅ Aktīvs" : "❌ Neaktīvs")}")));
+        
+        if (!combined.Any()) 
+        { 
+            Console.WriteLine("📭 Nav ierakstu."); 
+            return; 
+        }
+        
+        Tools.PrintTableHeader(new[] {"Datums", "Detalizācija"});
+        foreach (var row in combined.OrderByDescending(x => x.Date))
+            Console.WriteLine($"| {row.Date:yyyy-MM-dd}".PadRight(17) + $"| {row.Text}".PadRight(62) + "|");
+        Console.WriteLine(new string('-', 80));
     }
 
-    // ---- Filters ----
     static void FiltersMenu()
     {
-        Console.WriteLine("\n1) Filtrēt pēc datuma diapazona (ienākumi + izdevumi)");
+        Console.WriteLine("\n=== FILTRI ===");
+        Console.WriteLine("1) Filtrēt pēc datuma diapazona (ienākumi + izdevumi)");
         Console.WriteLine("2) Filtrēt izdevumus pēc kategorijas");
-        Console.Write("Izvēle: ");
-        string c = Console.ReadLine() ?? "";
+        var c = Tools.ReadNonEmptyString("Izvēle: ");
+        
         if (c == "1")
         {
-            var from = Tools.ReadDate("No (YYYY-MM-DD): ");
-            var to = Tools.ReadDate("Līdz (YYYY-MM-DD): ");
-            var inc = Incomes.Where(i => i.Date >= from && i.Date <= to).OrderByDescending(i => i.Date).ToList();
-            var exp = Expenses.Where(e => e.Date >= from && e.Date <= to).OrderByDescending(e => e.Date).ToList();
-
-            Console.WriteLine($"\nIenākumi ({inc.Count}):");
-            foreach (var i in inc) Console.WriteLine($"- {i.Date:yyyy-MM-dd} {i.Source}: {Tools.FormatCurrency(i.Amount)}");
-            Console.WriteLine($"Kopā ienākumi: {Tools.FormatCurrency(inc.Sum(x => x.Amount))}");
-
-            Console.WriteLine($"\nIzdevumi ({exp.Count}):");
-            foreach (var e in exp) Console.WriteLine($"- {e.Date:yyyy-MM-dd} [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}");
-            Console.WriteLine($"Kopā izdevumi: {Tools.FormatCurrency(exp.Sum(x => x.Amount))}");
+            var from = Tools.SafeParseDate("No datuma (YYYY-MM-DD): ");
+            var to = Tools.SafeParseDate("Līdz datumam (YYYY-MM-DD): ");
+            
+            var inc = Income.List.Where(i => i.Date >= from && i.Date <= to).OrderByDescending(i => i.Date).ToList();
+            var exp = Expense.List.Where(e => e.Date >= from && e.Date <= to).OrderByDescending(e => e.Date).ToList();
+            
+            Console.WriteLine($"\n📈 Ienākumi ({inc.Count}):");
+            foreach (var i in inc) 
+                Console.WriteLine($"- {i.Date:yyyy-MM-dd} {i.Source}: {Tools.FormatCurrency(i.Amount)}");
+            Console.WriteLine($"💰 Kopā ienākumi: {Tools.FormatCurrency(inc.Sum(x => x.Amount))}");
+            
+            Console.WriteLine($"\n📉 Izdevumi ({exp.Count}):");
+            foreach (var e in exp) 
+                Console.WriteLine($"- {e.Date:yyyy-MM-dd} [{e.Category}] {Tools.FormatCurrency(e.Amount)} — {e.Note}");
+            Console.WriteLine($"💸 Kopā izdevumi: {Tools.FormatCurrency(exp.Sum(x => x.Amount))}");
         }
         else if (c == "2")
         {
-            Console.WriteLine("Kategorijas: " + string.Join(", ", Enum.GetNames(typeof(Category))));
+            Console.WriteLine("📂 Kategorijas: " + string.Join(", ", Enum.GetNames(typeof(Category))));
             var cat = Tools.ReadEnum<Category>("Kategorija: ");
-            var byCat = Expenses.Where(e => e.Category == cat).OrderByDescending(e => e.Date).ToList();
-            if (!byCat.Any()) { Console.WriteLine("Nav ierakstu."); return; }
-            foreach (var e in byCat) Console.WriteLine($"{e.Date:yyyy-MM-dd} {Tools.FormatCurrency(e.Amount)} — {e.Note}");
-            Console.WriteLine($"Summa: {Tools.FormatCurrency(byCat.Sum(x => x.Amount))}");
+            var byCat = Expense.FilterByCategory(cat);
+            
+            Expense.PrintAll(byCat);
+            Console.WriteLine($"💰 Summa: {Tools.FormatCurrency(byCat.Sum(x => x.Amount))}");
         }
     }
 
-    // ---- Monthly report ----
     static void MonthReportMenu()
     {
-        string ym = Tools.ReadNonEmptyString("Ievadiet mēnesi (YYYY-MM): ");
-        if (!Tools.TryParseYearMonth(ym, out int year, out int month)) { Console.WriteLine("Nederīgs formāts (YYYY-MM)."); return; }
+        var ym = Tools.ReadNonEmptyString("Ievadiet mēnesi (YYYY-MM): ");
+        if (!Tools.TryParseYearMonth(ym, out var year, out var month)) 
+        { 
+            Console.WriteLine("❌ Nederīgs formāts. Lietojiet YYYY-MM."); 
+            return; 
+        }
+
         var monthStart = new DateOnly(year, month, 1);
         var monthEnd = monthStart.AddDays(DateTime.DaysInMonth(year, month) - 1);
 
-        var incs = Incomes.Where(i => i.Date >= monthStart && i.Date <= monthEnd).ToList();
-        var exps = Expenses.Where(e => e.Date >= monthStart && e.Date <= monthEnd).ToList();
-        var activeSubs = Subscriptions.Where(s => s.IsActive && s.StartDate <= monthEnd).ToList();
+        var incomes = Income.List.Where(i => i.Date >= monthStart && i.Date <= monthEnd).ToList();
+        var expenses = Expense.List.Where(e => e.Date >= monthStart && e.Date <= monthEnd).ToList();
+        var activeSubs = Subscription.List.Where(s => s.IsActive && s.StartDate <= monthEnd).ToList();
 
-        decimal sumIncome = incs.Sum(x => x.Amount);
-        decimal sumExpense = exps.Sum(x => x.Amount);
-        decimal sumSubs = activeSubs.Sum(x => x.MonthlyPrice);
-        decimal net = sumIncome - sumExpense - sumSubs;
+        var sumIncome = incomes.Sum(i => i.Amount);
+        var sumExpense = expenses.Sum(e => e.Amount);
+        var sumSubs = activeSubs.Sum(s => s.MonthlyPrice);
+        var net = sumIncome - sumExpense - sumSubs;
 
-        Console.WriteLine($"\n=== Pārskats par {year}-{month:D2} ===");
-        Console.WriteLine($"Ienākumi: {Tools.FormatCurrency(sumIncome)}");
-        Console.WriteLine($"Izdevumi: {Tools.FormatCurrency(sumExpense)}");
-        Console.WriteLine($"Aktīvie abonementi (kopā/mēn): {Tools.FormatCurrency(sumSubs)}");
-        Console.WriteLine($"Neto: {Tools.FormatCurrency(net)}");
+        Console.WriteLine($"\n📊 === PĀRSKATS PAR {year}-{month:D2} ===");
+        Console.WriteLine($"💰 Ienākumi: {Tools.FormatCurrency(sumIncome)}");
+        Console.WriteLine($"💸 Izdevumi: {Tools.FormatCurrency(sumExpense)}");
+        Console.WriteLine($"📱 Aktīvie abonementi: {Tools.FormatCurrency(sumSubs)}");
+        Console.WriteLine($"📈 Neto (Ienākumi - Izdevumi - Abon.): {Tools.FormatCurrency(net)}");
 
-        if (exps.Any())
+        if (expenses.Any())
         {
-            Console.WriteLine("\nIzdevumi pa kategorijām:");
-            var byCat = exps.GroupBy(e => e.Category).Select(g => new { Cat = g.Key, Sum = g.Sum(x => x.Amount) }).OrderByDescending(x => x.Sum);
+            Console.WriteLine("\n📂 Izdevumi pa kategorijām:");
+            var byCat = expenses.GroupBy(e => e.Category)
+                                .Select(g => new { Cat = g.Key, Sum = g.Sum(x => x.Amount) })
+                                .OrderByDescending(x => x.Sum);
             foreach (var c in byCat)
                 Console.WriteLine($"- {c.Cat}: {Tools.FormatCurrency(c.Sum)} ({Tools.PercentString(c.Sum, sumExpense)})");
 
-            var largest = exps.OrderByDescending(e => e.Amount).First();
-            Console.WriteLine($"\nLielākais izdevums: {Tools.FormatCurrency(largest.Amount)} — {largest.Category} — {largest.Note}");
+            var largest = expenses.OrderByDescending(e => e.Amount).First();
+            Console.WriteLine($"\n🔥 Lielākais izdevums: {largest.Category} — {Tools.FormatCurrency(largest.Amount)} — {largest.Note}");
         }
 
-        int days = DateTime.DaysInMonth(year, month);
-        decimal avg = days == 0 ? 0 : (decimal)Math.Round(sumExpense / days, 2);
-        Console.WriteLine($"\nVidējie dienas tēriņi: {Tools.FormatCurrency(avg)}");
+        var days = DateTime.DaysInMonth(year, month);
+        var avgDay = days == 0 ? 0 : Math.Round(Tools.SafeDivide(sumExpense, days), 2);
+        Console.WriteLine($"\n📅 Vidējie dienas tēriņi: {Tools.FormatCurrency(avgDay)}");
     }
 
-    // ---- Import / Export ----
     static void ImportExportMenu()
     {
-        Console.WriteLine("\n1) Eksportēt  2) Importēt  0) Atpakaļ");
-        Console.Write("Izvēle: ");
-        string c = Console.ReadLine() ?? "";
+        Console.WriteLine("\n=== IMPORT/EXPORT JSON ===");
+        Console.WriteLine("1) Eksportēt (parādīt JSON)");
+        Console.WriteLine("2) Importēt (ielīmēt JSON)");
+        Console.WriteLine("0) Atpakaļ");
+        
+        var c = Tools.ReadNonEmptyString("Izvēle: ");
         if (c == "0") return;
         if (c == "1")
         {
-            var dto = new ExportDto { Incomes = Incomes, Expenses = Expenses, Subscriptions = Subscriptions };
-            string json = JsonSerializer.Serialize(dto, JsonConfig.Options);
-            Console.WriteLine("\n=== Eksporta JSON ===");
+            var dto = new ExportDto { 
+                Incomes = Income.List, 
+                Expenses = Expense.List, 
+                Subscriptions = Subscription.List 
+            };
+            
+            string json = JsonSerializer.Serialize(dto, jsonOptions);
+            Console.WriteLine("\n=== EKSPORTA JSON ===");
             Console.WriteLine(json);
-            Console.WriteLine("=== Eksports pabeigts ===");
+            Console.WriteLine("=== EKSPORTS PABEIGTS ===");
         }
         else if (c == "2")
         {
-            string raw = Tools.ReadJsonInput();
-            raw = Tools.NormalizeJsonString(raw);
+            Console.WriteLine("Ielīmējiet JSON. Ja daudzrindu — pabeidziet ar rindas tekstu END. Ja vienrindiņa — ielīmējiet un nospiediet Enter.");
+            var lines = new List<string>();
+            
+            // Read first line
+            var firstLine = Console.ReadLine() ?? "";
+            if (firstLine.Length > 0 && firstLine[0] == '\uFEFF') 
+                firstLine = firstLine.Substring(1); // remove BOM
+            
+            lines.Add(firstLine);
+            
+            // Check if it's single-line JSON
+            string trimmedFirst = firstLine.Trim();
+            if (trimmedFirst.StartsWith("{") && trimmedFirst.EndsWith("}"))
+            {
+                // single-line JSON - use as is
+            }
+            else
+            {
+                // multi-line JSON - read until END
+                while (true)
+                {
+                    var line = Console.ReadLine() ?? "";
+                    if (line.Trim() == "END") break;
+                    lines.Add(line);
+                }
+            }
+            
+            var text = string.Join(Environment.NewLine, lines);
+            text = Tools.NormalizeJsonString(text);
+            
+            if (string.IsNullOrWhiteSpace(text)) 
+            { 
+                Console.WriteLine("❌ Nav ievades."); 
+                return; 
+            }
+
             try
             {
-                var imported = JsonSerializer.Deserialize<ExportDto>(raw, JsonConfig.Options);
+                var imported = JsonSerializer.Deserialize<ExportDto>(text, jsonOptions);
                 if (imported == null) throw new JsonException("Tukšs JSON.");
 
                 // Validate all entries before replacing in-memory data
@@ -576,37 +705,34 @@ public class Program
                 foreach (var i in imported.Incomes ?? Enumerable.Empty<Income>())
                 {
                     if (i == null) throw new ValidationException("Tukšs ienākuma ieraksts.");
-                    if (string.IsNullOrWhiteSpace(i.Source)) throw new ValidationException("Ienākuma avots nedrīkst būt tukšs.");
-                    if (i.Amount <= 0) throw new ValidationException("Ienākuma summa jābūt > 0.");
+                    i.Validate();
                     tmpInc.Add(i);
                 }
 
                 foreach (var e in imported.Expenses ?? Enumerable.Empty<Expense>())
                 {
                     if (e == null) throw new ValidationException("Tukšs izdevuma ieraksts.");
-                    if (e.Amount <= 0) throw new ValidationException("Izdevuma summa jābūt > 0.");
-                    if (string.IsNullOrWhiteSpace(e.Note)) throw new ValidationException("Izdevuma piezīme nedrīkst būt tukša.");
+                    e.Validate();
                     tmpExp.Add(e);
                 }
 
                 foreach (var s in imported.Subscriptions ?? Enumerable.Empty<Subscription>())
                 {
                     if (s == null) throw new ValidationException("Tukšs abonementa ieraksts.");
-                    if (string.IsNullOrWhiteSpace(s.Name)) throw new ValidationException("Abonementa nosaukums nedrīkst būt tukšs.");
-                    if (s.MonthlyPrice <= 0) throw new ValidationException("Abonementa cena jābūt > 0.");
+                    s.Validate();
                     tmpSubs.Add(s);
                 }
 
                 // All validated — replace data
-                Incomes = tmpInc;
-                Expenses = tmpExp;
-                Subscriptions = tmpSubs;
-                Console.WriteLine("Importēts veiksmīgi.");
+                Income.List = tmpInc;
+                Expense.List = tmpExp;
+                Subscription.List = tmpSubs;
+                Console.WriteLine("✅ Importēts veiksmīgi.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Importa kļūda: " + ex.Message);
-                Console.WriteLine("Dati netika mainīti.");
+                Console.WriteLine("❌ Importa kļūda: " + ex.Message);
+                Console.WriteLine("⚠️ Dati netika mainīti.");
             }
         }
     }
